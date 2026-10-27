@@ -1,0 +1,57 @@
+{
+  "auth.user.not_found": {
+    "pt": "Usuário não encontrado",
+    "en": "User not found",
+    "zh": "找不到用户",
+    "hi": "उपयोगकर्ता नहीं मिला",
+    "ar": "المستخدم غير موجود",
+    "es": "Usuario no encontrado"
+  },
+  "auth.password.invalid": {
+    "pt": "Senha inválida",
+    "en": "Invalid password",
+    "zh": "密码无效",
+    "hi": "अमान्य पासवर्ड",
+    "ar": "كلمة مرور غير صالحة",
+    "es": "Contraseña inválida"
+  },
+  "auth.user.unavailable": {
+    "pt": "Usuario inativado ou acesso expirado"
+  },
+  "auth.invalid_credentials" : {
+    "pt": "Credencial invalida"
+  },
+  "auth.tenant.not_found": {
+    "pt": "Tenant(ambiente) não encontrado"
+  },
+  "auth.account.locked": {
+    "pt": "Conta bloqueada. Tente novamente em {0}"
+  },
+  "auth.user.inactive" : {
+    "pt": "Conta desativada. Entre em contato com o administrador"
+  },
+  "auth.user.temporary_expired" : {
+    "pt": "Conta temporaria expirada. Entre em contato com o administrador"
+  },
+  "auth.email.already.exists": {
+    "pt": "E-mail já está em uso"
+  },
+  "auth.tenant.already.exists": {
+    "pt": "Tenant já existe"
+  },
+  "auth.default.role.not.found": {
+    "pt": "Role padrão do sistema não encontrada"
+  },
+  "upload.read_error": {
+    "pt": "Erro ao fazer leitura do arquito"
+  },
+  "upload.file.empty" : {
+    "pt": "Arquivo está vazio ou incorreto"
+  },
+  "upload.file.too_large": {
+    "pt": "Arquivo muito grande. Máximo: 5MB"
+  },
+  "upload.file.invalid_type": {
+    "pt": "Tipo de arquivo não permitido"
+  }
+}

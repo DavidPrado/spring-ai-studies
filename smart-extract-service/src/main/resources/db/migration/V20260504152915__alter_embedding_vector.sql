@@ -1,0 +1,1 @@
+ALTER TABLE tenant_knowledge ALTER COLUMN embedding TYPE vector(768);

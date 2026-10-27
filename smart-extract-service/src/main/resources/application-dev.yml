@@ -1,0 +1,69 @@
+server:
+  port: 18080
+  compression:
+    enabled: true
+    min-response-size: 2048
+
+spring:
+  main:
+    lazy-initialization: true
+    banner-mode: off
+
+  datasource:
+    url: jdbc:postgresql://localhost:5435/erp-ia-smartdb
+    username: admin
+    password: ${DB_PASSWORD:OUX0GQYLhJ}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 5
+      minimum-idle: 2
+
+  jpa:
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+        generate_statistics: true
+
+  mail:
+    host: smtp.gmail.com
+    port: 587
+    username: ${SMTP_USERNAME}
+    password: ${SMTP_PASSWORD}
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+
+  ai:
+    ollama:
+      base-url: http://localhost:11434
+      chat:
+        options:
+          model: llama3.1
+      embedding:
+        options:
+          model: nomic-embed-text
+
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:MinhaSenhaSegura123}
+
+app:
+  jwt:
+    secret: "chave_secreta_de_desenvolvimento_muito_longa_e_facil_para_testes_locais"
+  bulk:
+    max-sync-rows: 10000
+    fetch-size: 100
+
+logging:
+  level:
+    com.smart_extract_service: DEBUG
+    org.hibernate.SQL: DEBUG
+    org.hibernate.type.descriptor.sql.BasicBinder: TRACE
+    com.zaxxer.hikari: DEBUG
+    org.springframework.security: DEBUG
