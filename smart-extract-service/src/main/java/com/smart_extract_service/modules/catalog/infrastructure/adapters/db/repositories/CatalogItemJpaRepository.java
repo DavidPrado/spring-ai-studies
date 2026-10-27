@@ -39,6 +39,6 @@ public interface CatalogItemJpaRepository extends JpaRepository<CatalogItemEntit
     long nextSkuSequence(@Param("tenantId") UUID tenantId, @Param("prefix") String prefix);
 
     @Modifying
-    @Query(value = "UPDATE catalog_items SET embedding = :vec::vector WHERE id = :id", nativeQuery = true)
-    void updateEmbedding(@Param("id") UUID id, @Param("vec") String vec);
+    @Query(value = "UPDATE catalog_items SET embedding = CAST(?1 AS vector) WHERE id = ?2", nativeQuery = true)
+    void updateEmbedding(float[] embedding, UUID id);
 }

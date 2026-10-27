@@ -14,6 +14,7 @@ import com.smart_extract_service.modules.catalog.infrastructure.adapters.db.repo
 import com.smart_extract_service.modules.catalog.infrastructure.adapters.db.specs.CatalogItemSpecification;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
+import jakarta.persistence.Query;
 import lombok.RequiredArgsConstructor;
 import org.hibernate.annotations.QueryHints;
 import org.springframework.beans.factory.annotation.Value;
@@ -111,7 +112,7 @@ public class CatalogItemPersistenceAdapter implements CatalogItemRepositoryPort 
             sb.append(embedding[i]);
         }
         sb.append(']');
-        itemRepository.updateEmbedding(itemId, sb.toString());
+        itemRepository.updateEmbedding(embedding, itemId);
     }
 
     @Override
@@ -180,5 +181,34 @@ public class CatalogItemPersistenceAdapter implements CatalogItemRepositoryPort 
 
     private Specification<CatalogItemEntity> buildSpecification(UUID tenantId, Map<String, String> filters) {
         return CatalogItemSpecification.filterBy(tenantId, filters);
+    }
+
+    @Override
+    public List<CatalogItem> findBySemanticSimilarity(UUID tenantId,
+                                                      float[] queryEmbedding,
+                                                      int topK,
+                                                      double similarityThreshold) {
+
+        String sql = """
+            SELECT c.* FROM catalog_items c
+            WHERE c.tenant_id = ?1
+              AND c.deleted_at IS NULL
+              AND (1 - (c.embedding <=> CAST(?2 AS vector))) >= ?3
+            ORDER BY c.embedding <=> CAST(?2 AS vector)
+            LIMIT ?4
+            """;
+        Query query = entityManager.createNativeQuery(sql, CatalogItemEntity.class);
+
+        query.setParameter(1, tenantId);
+        query.setParameter(2, queryEmbedding);
+        query.setParameter(3, similarityThreshold);
+        query.setParameter(4, topK);
+
+        @SuppressWarnings("unchecked")
+        List<CatalogItemEntity> entities = query.getResultList();
+
+        return entities.stream()
+                .map(CatalogItemMapper::toDomain)
+                .toList();
     }
 }

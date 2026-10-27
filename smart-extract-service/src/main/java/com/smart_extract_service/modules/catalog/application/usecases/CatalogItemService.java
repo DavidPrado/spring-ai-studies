@@ -13,6 +13,7 @@ import com.smart_extract_service.modules.catalog.domain.ports.output.AttributeDe
 import com.smart_extract_service.modules.catalog.domain.ports.output.CatalogCategoryRepositoryPort;
 import com.smart_extract_service.modules.catalog.domain.ports.output.CatalogItemRepositoryPort;
 import com.smart_extract_service.modules.catalog.domain.support.EanValidator;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -26,18 +27,20 @@ import java.util.stream.Collectors;
 import static org.apache.logging.log4j.util.Strings.isBlank;
 import static org.apache.logging.log4j.util.Strings.trimToNull;
 
-
+@Slf4j
 @Service
 public class CatalogItemService implements CatalogItemUseCase {
 
     private final CatalogItemRepositoryPort itemRepository;
     private final CatalogCategoryRepositoryPort categoryRepository;
     private final AttributeDefRepositoryPort defRepository;
+    private final ProductEmbeddingService embeddingService;
 
-    public CatalogItemService(CatalogItemRepositoryPort itemRepository, CatalogCategoryRepositoryPort categoryRepository, AttributeDefRepositoryPort defRepository) {
+    public CatalogItemService(CatalogItemRepositoryPort itemRepository, CatalogCategoryRepositoryPort categoryRepository, AttributeDefRepositoryPort defRepository, ProductEmbeddingService embeddingService) {
         this.itemRepository = itemRepository;
         this.categoryRepository = categoryRepository;
         this.defRepository = defRepository;
+        this.embeddingService = embeddingService;
     }
 
     @Override
@@ -62,6 +65,9 @@ public class CatalogItemService implements CatalogItemUseCase {
 
         CatalogItem saved = itemRepository.save(item);
         saveVariants(tenantId, saved.getId(), request.variants());
+
+        embeddingService.generateAndSaveEmbedding(saved.getId());
+
         return toResponse(saved, category, itemRepository.findVariants(saved.getId()));
 
     }
@@ -82,6 +88,9 @@ public class CatalogItemService implements CatalogItemUseCase {
         CatalogItem saved = itemRepository.save(item);
         itemRepository.deleteVariantsByItem(saved.getId());
         saveVariants(tenantId, saved.getId(), request.variants());
+
+        embeddingService.generateAndSaveEmbedding(saved.getId());
+
         return toResponse(saved, category, itemRepository.findVariants(saved.getId()));
     }
 

@@ -61,10 +61,7 @@ public class CatalogAiService {
      * @param phiClient  Bean "phiChatClient" da configuração
      * @param repository Repository de catálogo (para validação de SKU)
      */
-    public CatalogAiService(
-            @Qualifier("qwenChatClient") ChatClient qwenClient,
-            @Qualifier("phiChatClient") ChatClient phiClient,
-            CatalogItemRepositoryPort repository) {
+    public CatalogAiService(@Qualifier("qwenChatClient") ChatClient qwenClient, @Qualifier("phiChatClient") ChatClient phiClient, CatalogItemRepositoryPort repository) {
         this.qwenClient = qwenClient;
         this.phiClient = phiClient;
         this.repository = repository;
@@ -93,49 +90,102 @@ public class CatalogAiService {
      * @return Dados enriquecidos (categoria, tags, descrição)
      */
     public AiEnrichmentResponse enrichProduct(String productName, String rawDescription) {
-        log.info("🧠 [QWEN] Processando produto: '{}' (Descrição fornecida: {})",
-                productName, (rawDescription == null || rawDescription.isBlank()) ? "NÃO" : "SIM");
+        String safeName  = (productName == null || productName.isBlank())
+                ? "Sem nome" : productName.trim();
+        String safeNotes = (rawDescription == null || rawDescription.isBlank())
+                ? "Nenhuma anotação" : rawDescription.trim();
 
-        // Define o contexto baseado no que o usuário forneceu
-        String contextInstruction = (rawDescription == null || rawDescription.isBlank())
-                ? "O usuário forneceu APENAS o nome. Crie uma descrição técnica completa e realista baseada neste tipo de produto."
-                : "O usuário forneceu anotações técnicas brutas. Reescreva e organize essas informações em um texto coeso, profissional e detalhado.";
+        log.info("🧠 [QWEN] Enriquecendo produto: '{}'", safeName);
+
+        boolean semAnotacoes = "Nenhuma anotação".equals(safeNotes);
+        String contextInstruction = semAnotacoes
+                ? "O usuário forneceu APENAS o nome. Gere uma descrição técnica mínima baseada somente "
+                + "no nome — NÃO invente especificações (voltagem, potência, medidas, cor, material)."
+                : "O usuário forneceu anotações. Reescreva de forma profissional, preservando TODAS as "
+                + "especificações e explicitando TERMOS DE BUSCA e CASOS DE USO.";
 
         String prompt = """
-                Você é um especialista técnico em cadastro de produtos para um ERP de varejo.
-                
-                Nome do Produto: %s
-                Anotações do Usuário: %s
-                
-                CONTEXTO: %s
-                
-                Retorne APENAS um objeto JSON válido, sem markdown, seguindo estritamente este formato:
-                {{
-                  "category": "Bebidas, Alimentos, Serviços, Eletrônicos, Informática, Móveis, Escritório ou Outros",
-                  "tags": ["tag1", "tag2", "tag3"],
-                  "enhancedDescription": "descrição aqui"
-                }}
-                
-                REGRAS ABSOLUTAS PARA A DESCRIÇÃO:
-                1. FOCO TOTAL EM DADOS TÉCNICOS E ESPECIFICAÇÕES.
-                2. NUNCA use frases de marketing vazias como "eleve seu desempenho", "o melhor do mercado" ou "design incrível" sem explicar o PORQUÊ técnico.
-                3. Se o usuário deu specs (ex: 16gb, rgb), elas DEVEM aparecer explicitamente no texto final.
-                4. Use no máximo 3 a 4 frases, em Português do Brasil, com tom informativo e objetivo.
-                
-                EXEMPLO DE BOA DESCRIÇÃO:
-                "Mouse gamer sem fio com sensor óptico de 16000 DPI, 6 botões programáveis e bateria de longa duração (até 70h). Possui iluminação RGB customizável e design ergonômico."
-                """.formatted(
-                productName != null ? productName : "Sem nome",
-                rawDescription != null ? rawDescription : "Nenhuma anotação fornecida",
-                contextInstruction
-        );
+            ## PAPEL
+            Você é um especialista sênior em SEO, e-commerce e cadastro de produtos para ERP.
+            Sua tarefa é transformar informações brutas em uma ficha de produto otimizada para buscas.
 
-        AiEnrichmentResponse response = qwenClient.prompt()
+            ## ENTRADA
+            Nome do Produto: %s
+            Anotações do Usuário: %s
+            Contexto Adicional: %s
+
+            ## OBJETIVO
+            Gerar metadados estruturados (categoria, tags e descrição otimizada) que maximizem a
+            descoberta do produto em buscas internas e externas, mantendo fidelidade total aos
+            dados fornecidos.
+
+            ## REGRAS DE OURO (obrigatórias)
+            1. NUNCA invente especificações, medidas, materiais, potência, cor, voltagem ou
+               benefícios que não estejam explícitos na entrada. Se faltar dado, omita — não
+               preencha com suposições.
+            2. Use o nome do produto como âncora para inferir a categoria correta. Em caso de
+               ambiguidade, escolha a categoria mais ampla e segura.
+            3. Se as anotações estiverem vazias ou insuficientes, produza uma descrição curta
+               baseada apenas no nome — sem inventar atributos.
+            4. Preserve 100%% das especificações técnicas fornecidas (números, medidas,
+               materiais, cor).
+
+            ## REGRAS DA DESCRIÇÃO (enhancedDescription)
+            - Idioma: Português do Brasil.
+            - Extensão: 3 a 4 frases curtas (máx. ~350 caracteres).
+            - Tom: técnico-comercial, objetivo, sem superlativos vazios ("o melhor", "incrível").
+            - Primeira frase = resumo do produto (útil como snippet de busca).
+            - Inclua naturalmente: tipo do item, categoria implícita, palavras-chave de intenção
+              de busca (ex: "fritar sem óleo", "cozinha saudável", "preparo rápido") e as
+              especificações técnicas fornecidas pelo usuário.
+            - NÃO use markdown, listas, emojis, aspas extras ou quebras de linha.
+
+            ## REGRAS DAS TAGS
+            - 3 a 6 tags em minúsculas, sem acentos quando possível, cada uma com 1 a 3 palavras.
+            - Mix de: tipo do produto, atributo técnico relevante e intenção de uso.
+            - Não repita a categoria literalmente.
+
+            ## SAÍDA
+            Retorne APENAS um objeto JSON válido, sem markdown, sem comentários, exatamente neste
+            schema:
+            {{
+              "category": "string",
+              "tags": ["string", "string", "string"],
+              "enhancedDescription": "string"
+            }}
+
+            ## EXEMPLO POSITIVO
+            Entrada: Nome="Air Fryer 4L", Anotações="cesto antiaderente, timer 30min, 1400w, preta"
+            Saída:
+            {{
+              "category": "Eletroportáteis",
+              "tags": ["air fryer", "fritadeira eletrica", "cozinha saudavel", "1400w"],
+              "enhancedDescription": "Fritadeira elétrica Air Fryer de 4 litros para fritar alimentos sem óleo na cozinha. Possui cesto antiaderente, timer de 30 minutos e potência de 1400w. Cor preta, ideal para preparo rápido e refeições saudáveis no dia a dia."
+            }}
+
+            ## EXEMPLO NEGATIVO (NÃO FAÇA)
+            - Inventar "voltagem 220V" quando o usuário não informou.
+            - Escrever "O melhor air fryer do mercado, perfeito para sua família!" (superlativo
+              vazio + suposição).
+            - Devolver texto fora do JSON, ou usar ```json no output.
+
+            ## TAREFA
+            Gere o JSON agora.
+            """.formatted(safeName, safeNotes, contextInstruction);
+
+        AiEnrichmentResponse response = qwenClient
+                .prompt()
                 .user(prompt)
                 .call()
                 .entity(AiEnrichmentResponse.class);
 
-        log.info("✅ [QWEN] Produto processado: categoria={}", response.category());
+        if (response == null) {
+            log.error("❌ [QWEN] Resposta nula do modelo para produto '{}'", safeName);
+            throw new IllegalStateException("Resposta vazia do modelo ao enriquecer produto: " + safeName);
+        }
+
+        log.info("✅ [QWEN] Produto enriquecido: categoria={}, tags={}",
+                response.category(), response.tags());
         return response;
     }
 
@@ -165,12 +215,7 @@ public class CatalogAiService {
                 """.formatted(productName != null ? productName : "");
 
         // .content() retorna apenas o texto puro da resposta
-        String response = phiClient.prompt()
-                .user(prompt)
-                .call()
-                .content()
-                .trim()
-                .toUpperCase();
+        String response = phiClient.prompt().user(prompt).call().content().trim().toUpperCase();
 
         // Segurança: Se a IA alucinar, temos um fallback
         if (!response.equals("PRODUCT") && !response.equals("SERVICE")) {
@@ -226,12 +271,7 @@ public class CatalogAiService {
                 SKU:
                 """.formatted(text != null ? text : "");
 
-        String response = phiClient.prompt()
-                .user(prompt)
-                .call()
-                .content()
-                .trim()
-                .toUpperCase();
+        String response = phiClient.prompt().user(prompt).call().content().trim().toUpperCase();
 
         log.info("🔍 [PHI] Resposta raw da IA: '{}'", response);
 
@@ -242,8 +282,7 @@ public class CatalogAiService {
 
         // ★ CORREÇÃO: Usar Matcher.find() para busca parcial
         // Isso permite extrair o SKU mesmo se a IA retornar texto extra
-        Matcher matcher = Pattern.compile("[A-Z]{3}-\\d{5}")
-                .matcher(response);
+        Matcher matcher = Pattern.compile("[A-Z]{3}-\\d{5}").matcher(response);
 
         if (matcher.find()) {
             String sku = matcher.group();
@@ -296,12 +335,7 @@ public class CatalogAiService {
                 SKU:
                 """.formatted(productName != null ? productName : "produto");
 
-        String suggestedSku = phiClient.prompt()
-                .user(prompt)
-                .call()
-                .content()
-                .trim()
-                .toUpperCase();
+        String suggestedSku = phiClient.prompt().user(prompt).call().content().trim().toUpperCase();
 
         log.info(" [PHI] SKU sugerido pela IA: '{}'", suggestedSku);
 
@@ -326,8 +360,7 @@ public class CatalogAiService {
         }
 
         if (attempts >= 10) {
-            throw new RuntimeException(
-                    "Não foi possível gerar SKU único após 10 tentativas para: " + productName);
+            throw new RuntimeException("Não foi possível gerar SKU único após 10 tentativas para: " + productName);
         }
 
         log.info("✅ SKU único garantido: {}", finalSku);
@@ -349,13 +382,8 @@ public class CatalogAiService {
         String prefix = "PRD"; // default
 
         if (productName != null && productName.length() >= 3) {
-            String clean = productName.toUpperCase()
-                    .replaceAll("[^A-Z]", "")  // remove espaços, acentos, etc.
-                    .replaceAll("[ÁÀÂÃ]", "A")
-                    .replaceAll("[ÉÈÊ]", "E")
-                    .replaceAll("[ÍÌÎ]", "I")
-                    .replaceAll("[ÓÒÔÕ]", "O")
-                    .replaceAll("[ÚÙÛ]", "U");
+            String clean = productName.toUpperCase().replaceAll("[^A-Z]", "")  // remove espaços, acentos, etc.
+                    .replaceAll("[ÁÀÂÃ]", "A").replaceAll("[ÉÈÊ]", "E").replaceAll("[ÍÌÎ]", "I").replaceAll("[ÓÒÔÕ]", "O").replaceAll("[ÚÙÛ]", "U");
 
             if (clean.length() >= 3) {
                 prefix = clean.substring(0, 3);
