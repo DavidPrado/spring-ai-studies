@@ -2,7 +2,6 @@ package com.smart_extract_service.modules.bulk.domain.model;
 
 import com.smart_extract_service.modules.bulk.domain.enums.BulkJobStatus;
 
-import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.UUID;
 

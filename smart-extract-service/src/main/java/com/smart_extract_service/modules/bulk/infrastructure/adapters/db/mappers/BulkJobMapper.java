@@ -25,9 +25,19 @@ public final class BulkJobMapper {
                 .payloadFilePath(entity.getPayloadFilePath())
                 .build();
 
+        // ✅ CORREÇÃO CRÍTICA: Mapear TODOS os campos de estado da entidade para o domínio
+        job.setStatus(entity.getStatus());
         job.setTotalItems(entity.getTotalItems());
-        job.setLastError(entity.getLastError());
+        job.setProcessedItems(entity.getProcessedItems());
+        job.setSuccessItems(entity.getSuccessItems());
+        job.setErrorItems(entity.getErrorItems());
+        job.setErrorFilePath(entity.getErrorFilePath());
+        job.setErrorSummary(entity.getErrorSummary());
+        job.setWorkerId(entity.getWorkerId());
         job.setRetryCount(entity.getRetryCount());
+        job.setLastError(entity.getLastError());
+        job.setStartedAt(entity.getStartedAt());
+        job.setFinishedAt(entity.getFinishedAt());
 
         return job;
     }
@@ -61,6 +71,7 @@ public final class BulkJobMapper {
                 .queuedAt(job.getQueuedAt())
                 .startedAt(job.getStartedAt())
                 .finishedAt(job.getFinishedAt())
+                // createdAt e updatedAt são gerenciados pelo @PrePersist e @PreUpdate da Entity
                 .build();
     }
 }

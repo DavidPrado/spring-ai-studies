@@ -55,29 +55,23 @@ public class CatalogItemPersistenceAdapter implements CatalogItemRepositoryPort 
 
     @Override
     public Page<CatalogItem> findAll(UUID tenantId, Map<String, String> filters, Pageable pageable) {
-        return itemRepository.findAll(CatalogItemSpecification.filterBy(tenantId, filters), pageable)
-                .map(CatalogItemMapper::toDomain);
+        return itemRepository.findAll(CatalogItemSpecification.filterBy(tenantId, filters), pageable).map(CatalogItemMapper::toDomain);
     }
 
     @Override
     public boolean existsSku(UUID tenantId, String sku, UUID exceptId) {
-        return exceptId == null
-                ? itemRepository.existsByTenantIdAndSku(tenantId, sku)
-                : itemRepository.existsByTenantIdAndSkuAndIdNot(tenantId, sku, exceptId);
+        return exceptId == null ? itemRepository.existsByTenantIdAndSku(tenantId, sku) : itemRepository.existsByTenantIdAndSkuAndIdNot(tenantId, sku, exceptId);
     }
 
     @Override
     public boolean existsEan(UUID tenantId, String ean, UUID exceptId) {
-        return exceptId == null
-                ? itemRepository.existsByTenantIdAndEan(tenantId, ean)
-                : itemRepository.existsByTenantIdAndEanAndIdNot(tenantId, ean, exceptId);
+        return exceptId == null ? itemRepository.existsByTenantIdAndEan(tenantId, ean) : itemRepository.existsByTenantIdAndEanAndIdNot(tenantId, ean, exceptId);
     }
 
     @Override
     public Map<UUID, Long> countActiveByCategoryIds(Collection<UUID> categoryIds) {
         if (categoryIds == null || categoryIds.isEmpty()) return Map.of();
-        return itemRepository.countByStatusGroupByCategory(ItemStatus.ACTIVE, categoryIds).stream()
-                .collect(Collectors.toMap(row -> (UUID) row[0], row -> (Long) row[1]));
+        return itemRepository.countByStatusGroupByCategory(ItemStatus.ACTIVE, categoryIds).stream().collect(Collectors.toMap(row -> (UUID) row[0], row -> (Long) row[1]));
     }
 
     @Override
@@ -89,14 +83,12 @@ public class CatalogItemPersistenceAdapter implements CatalogItemRepositoryPort 
 
     @Override
     public CatalogItemVariant saveVariant(CatalogItemVariant variant) {
-        return CatalogItemVariantMapper.toDomain(
-                variantRepository.save(CatalogItemVariantMapper.toEntity(variant)));
+        return CatalogItemVariantMapper.toDomain(variantRepository.save(CatalogItemVariantMapper.toEntity(variant)));
     }
 
     @Override
     public List<CatalogItemVariant> findVariants(UUID itemId) {
-        return variantRepository.findByItemIdOrderBySkuAsc(itemId).stream()
-                .map(CatalogItemVariantMapper::toDomain).toList();
+        return variantRepository.findByItemIdOrderBySkuAsc(itemId).stream().map(CatalogItemVariantMapper::toDomain).toList();
     }
 
     @Override
@@ -130,27 +122,32 @@ public class CatalogItemPersistenceAdapter implements CatalogItemRepositoryPort 
 
     @Override
     @Transactional(readOnly = true)
-    public void streamForExport(UUID tenantId, Map<String, String> filters,
-                                Consumer<CatalogItemExportRow> sink) {
+    public void streamForExport(UUID tenantId, Map<String, String> filters, Consumer<CatalogItemExportRow> sink) {
+
         StringBuilder jpql = new StringBuilder("""
-                SELECT i.sku, i.ean, i.name, c.name, i.itemType, i.status,
-                       i.unitOfMeasure, i.salePrice, i.costPrice
-                FROM CatalogItemEntity i
-                LEFT JOIN CatalogCategoryEntity c ON c.id = i.categoryId
+                SELECT i FROM CatalogItemEntity i
                 WHERE i.tenantId = :tenant AND i.deletedAt IS NULL
                 """);
 
         String search = filters.get("search");
         if (search != null && !search.isBlank()) {
-            jpql.append(" AND (LOWER(i.name) LIKE :search OR LOWER(i.sku) LIKE :search"
-                    + " OR LOWER(i.ean) LIKE :search)");
+            jpql.append(" AND (LOWER(i.name) LIKE :search OR LOWER(i.sku) LIKE :search OR LOWER(i.ean) LIKE :search)");
         }
+
         String status = filters.get("status");
-        if (status != null && !status.isBlank()) jpql.append(" AND i.status = :status");
+        if (status != null && !status.isBlank()) {
+            jpql.append(" AND i.status = :status");
+        }
+
         String type = filters.get("itemType");
-        if (type != null && !type.isBlank()) jpql.append(" AND i.itemType = :itemType");
+        if (type != null && !type.isBlank()) {
+            jpql.append(" AND i.itemType = :itemType");
+        }
+
         String category = filters.get("categoryId");
-        if (category != null && !category.isBlank()) jpql.append(" AND i.categoryId = :categoryId");
+        if (category != null && !category.isBlank()) {
+            jpql.append(" AND i.categoryId = :categoryId");
+        }
 
         jpql.append(switch (filters.getOrDefault("sort", "createdAt,desc")) {
             case "createdAt,asc" -> " ORDER BY i.createdAt ASC";
@@ -159,23 +156,23 @@ public class CatalogItemPersistenceAdapter implements CatalogItemRepositoryPort 
             default -> " ORDER BY i.createdAt DESC";
         });
 
-        var query = entityManager.createQuery(jpql.toString(), Object[].class)
-                .setParameter("tenant", tenantId)
-                .setHint(QueryHints.FETCH_SIZE, fetchSize);   // cursor Postgres (500)
+        var query = entityManager.createQuery(jpql.toString(), CatalogItemEntity.class).setParameter("tenant", tenantId).setHint(QueryHints.FETCH_SIZE, fetchSize);
 
         if (search != null && !search.isBlank()) {
             query.setParameter("search", "%" + search.trim().toLowerCase() + "%");
         }
-        if (status != null && !status.isBlank()) query.setParameter("status", ItemStatus.valueOf(status));
-        if (type != null && !type.isBlank()) query.setParameter("itemType", ItemType.valueOf(type));
-        if (category != null && !category.isBlank()) query.setParameter("categoryId", UUID.fromString(category));
+        if (status != null && !status.isBlank()) {
+            query.setParameter("status", ItemStatus.valueOf(status));
+        }
+        if (type != null && !type.isBlank()) {
+            query.setParameter("itemType", ItemType.valueOf(type));
+        }
+        if (category != null && !category.isBlank()) {
+            query.setParameter("categoryId", UUID.fromString(category));
+        }
 
-        try (Stream<Object[]> stream = query.getResultStream()) {   // cursor aberto só aqui
-            stream.map(row -> new CatalogItemExportRow(
-                            (String) row[0], (String) row[1], (String) row[2], (String) row[3],
-                            String.valueOf(row[4]), String.valueOf(row[5]), String.valueOf(row[6]),
-                            (BigDecimal) row[7], (BigDecimal) row[8]))
-                    .forEach(sink);
+        try (Stream<CatalogItemEntity> stream = query.getResultStream()) {
+            stream.map(entity -> new CatalogItemExportRow(entity.getSku(), entity.getName(), entity.getDescription(), entity.getCategoryId(), entity.getItemType(), entity.getStatus(), entity.getUnitOfMeasure(), entity.getSalePrice(), entity.getCostPrice(), entity.getNcm(), entity.getCest(), entity.getTaxOrigin(), entity.getCstIcms(), entity.getCsosn(), entity.getServiceCode(), entity.getIssRate(), entity.isTracksBatch(), entity.isTracksExpiry(), entity.isHazardous(), entity.getMinStock(), entity.getMaxStock(), entity.getReorderStock(), entity.getExtraData())).forEach(sink);
         }
     }
 
@@ -184,19 +181,16 @@ public class CatalogItemPersistenceAdapter implements CatalogItemRepositoryPort 
     }
 
     @Override
-    public List<CatalogItem> findBySemanticSimilarity(UUID tenantId,
-                                                      float[] queryEmbedding,
-                                                      int topK,
-                                                      double similarityThreshold) {
+    public List<CatalogItem> findBySemanticSimilarity(UUID tenantId, float[] queryEmbedding, int topK, double similarityThreshold) {
 
         String sql = """
-            SELECT c.* FROM catalog_items c
-            WHERE c.tenant_id = ?1
-              AND c.deleted_at IS NULL
-              AND (1 - (c.embedding <=> CAST(?2 AS vector))) >= ?3
-            ORDER BY c.embedding <=> CAST(?2 AS vector)
-            LIMIT ?4
-            """;
+                SELECT c.* FROM catalog_items c
+                WHERE c.tenant_id = ?1
+                  AND c.deleted_at IS NULL
+                  AND (1 - (c.embedding <=> CAST(?2 AS vector))) >= ?3
+                ORDER BY c.embedding <=> CAST(?2 AS vector)
+                LIMIT ?4
+                """;
         Query query = entityManager.createNativeQuery(sql, CatalogItemEntity.class);
 
         query.setParameter(1, tenantId);
@@ -204,11 +198,8 @@ public class CatalogItemPersistenceAdapter implements CatalogItemRepositoryPort 
         query.setParameter(3, similarityThreshold);
         query.setParameter(4, topK);
 
-        @SuppressWarnings("unchecked")
-        List<CatalogItemEntity> entities = query.getResultList();
+        @SuppressWarnings("unchecked") List<CatalogItemEntity> entities = query.getResultList();
 
-        return entities.stream()
-                .map(CatalogItemMapper::toDomain)
-                .toList();
+        return entities.stream().map(CatalogItemMapper::toDomain).toList();
     }
 }

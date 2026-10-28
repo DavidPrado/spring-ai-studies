@@ -7,6 +7,7 @@ import com.opencsv.CSVParserBuilder;
 import com.opencsv.CSVReader;
 import com.opencsv.CSVReaderBuilder;
 import com.smart_extract_service.core.context.TenantContext;
+import com.smart_extract_service.core.context.UserContext;
 import com.smart_extract_service.modules.bulk.application.spi.BulkEntityHandler;
 import com.smart_extract_service.modules.bulk.domain.model.BulkJob;
 import com.smart_extract_service.modules.bulk.domain.ports.input.BulkJobUseCase;
@@ -33,6 +34,7 @@ public class BulkImportController {
     private final BulkJobUseCase jobUseCase;
     private final ObjectMapper objectMapper;
     private final Map<String, BulkEntityHandler> handlers;
+
 
     @PostMapping("/{entity}/import")
     @PreAuthorize("hasAuthority('bulk:import')")
@@ -76,12 +78,10 @@ public class BulkImportController {
     @PreAuthorize("hasAuthority('bulk:import')")
     public ResponseEntity<List<Map<String, Object>>> listUserJobs() {
         UUID tenantId = TenantContext.getCurrentTenant();
-        String username = SecurityContextHolder.getContext().getAuthentication().getName();
-        UUID userId = UUID.fromString(username);
+        UUID userId = UserContext.getUserId();
 
         List<BulkJob> jobs = jobUseCase.findUserJobs(tenantId, userId, 20);
 
-        // Usamos HashMap para evitar o limite de 10 pares do Map.of()
         List<Map<String, Object>> response = jobs.stream().map(job -> {
             Map<String, Object> map = new java.util.HashMap<>();
             map.put("id", job.getId().toString());
@@ -179,7 +179,7 @@ public class BulkImportController {
 
             UUID tenantId = TenantContext.getCurrentTenant();
             String username = SecurityContextHolder.getContext().getAuthentication().getName();
-            UUID userId = UUID.fromString(username);
+            UUID userId = UserContext.getUserId();
 
             String payloadJson = objectMapper.writeValueAsString(data);
 

@@ -1,5 +1,7 @@
 package com.smart_extract_service.modules.bulk.infrastructure.adapters.bulk;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.smart_extract_service.modules.bulk.application.dto.ImportResult;
 import com.smart_extract_service.modules.bulk.application.dto.RowError;
 import com.smart_extract_service.modules.bulk.application.spi.BulkCell;
@@ -10,81 +12,174 @@ import com.smart_extract_service.modules.catalog.domain.enums.UnitOfMeasure;
 import com.smart_extract_service.modules.catalog.domain.model.CatalogItem;
 import com.smart_extract_service.modules.catalog.domain.ports.output.CatalogItemRepositoryPort;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.util.*;
 import java.util.function.Consumer;
 
-@Component
+/**
+ * ============================================================================
+ * CLASSE: CatalogItemsBulkHandler
+ * ============================================================================
+ *
+ * PROPÓSITO NO SISTEMA:
+ * Esta classe é o "Adaptador de Infraestrutura" responsável por processar
+ * importações e exportações em massa especificamente para a entidade CatalogItem.
+ *
+ * POR QUE ELA EXISTE?
+ * 1. Desacoplamento: Separa a lógica complexa de parsing de CSV/JSON da regra
+ *    de negócio pura, mantendo o domínio limpo.
+ * 2. Resiliência: Processa em lotes (batches), validando linha a linha. Se uma
+ *    linha tiver erro, ela é registrada, mas não interrompe as demais.
+ * 3. Padronização: Implementa a interface BulkEntityHandler, permitindo que o
+ *    sistema adicione novos importadores (ex: Clients, Suppliers) sem mudar o core.
+ *
+ * FLUXO DE EXECUÇÃO:
+ * Upload CSV -> Controller cria Job QUEUED -> Worker pega o Job ->
+ * Worker chama este Handler -> Validação -> Mapeamento para Domínio -> Save no Banco.
+ * ============================================================================
+ */
+@Slf4j
+@Component("catalog-items") // ⚠️ CRÍTICO: O nome do bean DEVE ser "catalog-items" para o Map do Spring encontrar
 @RequiredArgsConstructor
 public class CatalogItemsBulkHandler implements BulkEntityHandler {
 
+    // Dependências injetadas automaticamente pelo Spring
     private final CatalogItemRepositoryPort repository;
+    private final ObjectMapper objectMapper; // Usado para parsear o campo extraData (JSON)
 
+    /**
+     * 1. IDENTIFICADOR DA ENTIDADE
+     * Retorna a chave única usada pelo BulkJobWorker para encontrar este handler.
+     */
     @Override
     public String entity() {
         return "catalog-items";
     }
 
+    /**
+     * 2. CABEÇALHOS PARA EXPORTAÇÃO/TEMPLATE
+     * Define a ordem e os nomes exatos das colunas que aparecerão no CSV de exportação
+     * ou no modelo de importação baixado pelo usuário.
+     */
     @Override
     public List<String> headers() {
-        // Cabeçalhos para EXPORTAÇÃO (o que o usuário vê no Excel)
-        return List.of("SKU", "EAN", "Nome", "Categoria", "Tipo", "Status",
-                "Unidade", "Preço de Venda", "Preço de Custo", "Margem %");
+        return List.of(
+                "sku", "name", "description", "categoryId", "itemType", "status", "unitOfMeasure",
+                "salePrice", "costPrice", "ncm", "cest", "taxOrigin", "cstIcms", "csosn",
+                "serviceCode", "issRate", "tracksBatch", "tracksExpiry", "isHazardous",
+                "minStock", "maxStock", "reorderStock", "extraData"
+        );
     }
 
+    /**
+     * 3. CONTAGEM DE REGISTROS
+     * Usado pela UI de exportação para mostrar progresso ("Exportando 50 de 1000 itens...").
+     */
     @Override
     public long count(UUID tenantId, Map<String, String> filters) {
         return repository.countByFilters(tenantId, filters);
     }
 
+    /**
+     * 4. STREAMING DE DADOS (EXPORTAÇÃO)
+     * Lê os dados do banco em chunks (lotes) para não estourar a memória (OutOfMemoryError)
+     * em bases de dados grandes, convertendo cada linha para o formato de células formatadas.
+     */
     @Override
     public void streamRows(UUID tenantId, Map<String, String> filters, Consumer<List<BulkCell>> rowSink) {
-        repository.streamForExport(tenantId, filters, row -> rowSink.accept(List.of(
-                BulkCell.text(row.sku()),
-                BulkCell.text(row.ean() == null ? "" : row.ean()),
-                BulkCell.text(row.name()),
-                BulkCell.text(row.categoryName() == null ? "" : row.categoryName()),
-                BulkCell.text(typeLabel(row.itemType())),
-                BulkCell.text(statusLabel(row.status())),
-                BulkCell.text(row.unitOfMeasure()),
-                BulkCell.number(row.salePrice()),
-                BulkCell.number(row.costPrice()),
-                BulkCell.percent(margin(row.salePrice(), row.costPrice()))
-        )));
+        repository.streamForExport(tenantId, filters, row -> {
+
+            // Mapeia cada campo do objeto de retorno do repositório para uma BulkCell formatada.
+            // Tratamento de null é aplicado para evitar NullPointerException durante a exportação.
+            List<BulkCell> cells = List.of(
+                    BulkCell.text(row.sku() != null ? row.sku() : ""),
+                    BulkCell.text(row.name() != null ? row.name() : ""),
+                    BulkCell.text(row.description() != null ? row.description() : ""),
+                    BulkCell.text(row.categoryId() != null ? row.categoryId().toString() : ""),
+                    BulkCell.text(row.itemType() != null ? row.itemType().name() : ""),
+                    BulkCell.text(row.status() != null ? row.status().name() : ""),
+                    BulkCell.text(row.unitOfMeasure() != null ? row.unitOfMeasure().name() : ""),
+                    BulkCell.number(row.salePrice()),
+                    BulkCell.number(row.costPrice()),
+
+                    // Campos Fiscais
+                    BulkCell.text(row.ncm() != null ? row.ncm() : ""),
+                    BulkCell.text(row.cest() != null ? row.cest() : ""),
+                    BulkCell.text(row.taxOrigin() != null ? row.taxOrigin() : ""),
+                    BulkCell.text(row.cstIcms() != null ? row.cstIcms() : ""),
+                    BulkCell.text(row.csosn() != null ? row.csosn() : ""),
+                    BulkCell.text(row.serviceCode() != null ? row.serviceCode() : ""),
+                    BulkCell.number(row.issRate()),
+
+                    // Controles Verticais
+                    BulkCell.bool(row.tracksBatch()),
+                    BulkCell.bool(row.tracksExpiry()),
+                    BulkCell.bool(row.isHazardous()), // ⚠️ Verifique se no seu record é isHazardous() ou hazardous()
+
+                    // Estoque (Convertendo Integer para BigDecimal para o BulkCell.number)
+                    BulkCell.number(row.minStock() != null ? BigDecimal.valueOf(row.minStock()) : null),
+                    BulkCell.number(row.maxStock() != null ? BigDecimal.valueOf(row.maxStock()) : null),
+                    BulkCell.number(row.reorderStock() != null ? BigDecimal.valueOf(row.reorderStock()) : null),
+
+                    // Dados Extras (JSON)
+                    BulkCell.text(row.extraData() != null ? row.extraData().toString() : "")
+            );
+
+            // Envia a linha formatada para o renderer (CSV ou Excel)
+            rowSink.accept(cells);
+        });
     }
 
+    /**
+     * 5. VALIDAÇÃO DE LINHA (PRÉ-PROCESSAMENTO)
+     * Verifica se os dados brutos do CSV fazem sentido ANTES de tentar converter para o Domínio.
+     * Isso evita exceções desnecessárias do Hibernate e gera relatórios de erro claros para o usuário.
+     */
     @Override
     public List<String> validateRow(Map<String, String> row) {
         List<String> errors = new ArrayList<>();
 
-        String sku = row.get("sku");
-        String name = row.get("name");
+        String sku = getSafeString(row, "sku");
+        String name = getSafeString(row, "name");
+        String categoryIdStr = getSafeString(row, "categoryId");
 
-        if (sku == null || sku.isBlank()) {
-            errors.add("O campo 'sku' é obrigatório.");
-        }
-        if (name == null || name.isBlank()) {
-            errors.add("O campo 'nome' é obrigatório.");
-        }
+        // Validações de campos obrigatórios
+        if (sku.isBlank()) errors.add("O campo 'sku' é obrigatório.");
+        if (name.isBlank()) errors.add("O campo 'name' é obrigatório.");
 
-        String salePriceStr = row.get("salePrice");
-        if (salePriceStr != null && !salePriceStr.isBlank()) {
+        if (categoryIdStr.isBlank()) {
+            errors.add("O campo 'categoryId' é obrigatório.");
+        } else {
+            // Valida se o formato do UUID da categoria é válido
             try {
-                BigDecimal price = new BigDecimal(salePriceStr.replace(',', '.'));
-                if (price.compareTo(BigDecimal.ZERO) < 0) {
-                    errors.add("O 'Preço de Venda' não pode ser negativo.");
-                }
-            } catch (NumberFormatException e) {
-                errors.add("O 'Preço de Venda' deve ser um número válido.");
+                UUID.fromString(categoryIdStr);
+            } catch (IllegalArgumentException e) {
+                errors.add("O 'categoryId' deve ser um UUID válido (ex: 123e4567-e89b-12d3-a456-426614174000).");
             }
         }
+
+        // Validação de Enum
+        String itemTypeStr = getSafeString(row, "itemType");
+        if (!itemTypeStr.equalsIgnoreCase("PRODUCT") && !itemTypeStr.equalsIgnoreCase("SERVICE")) {
+            errors.add("O 'itemType' deve ser 'PRODUCT' ou 'SERVICE'.");
+        }
+
+        // Validações numéricas seguras
+        validateDecimal(row, "salePrice", errors, "Preço de Venda");
+        validateDecimal(row, "costPrice", errors, "Preço de Custo");
+        validateDecimal(row, "issRate", errors, "Alíquota ISS");
 
         return errors;
     }
 
+    /**
+     * 6. PROCESSAMENTO EM LOTE (O CORAÇÃO DA IMPORTAÇÃO)
+     * Recebe um lote de linhas JÁ VALIDADAS, converte para o modelo de domínio e salva no banco.
+     * O try-catch interno garante que um erro em uma linha não pare o processamento das demais.
+     */
     @Override
     public ImportResult processBatch(UUID tenantId, List<Map<String, String>> rows, String mode) {
         int successCount = 0;
@@ -93,124 +188,233 @@ public class CatalogItemsBulkHandler implements BulkEntityHandler {
         for (int i = 0; i < rows.size(); i++) {
             Map<String, String> row = rows.get(i);
             try {
+                // 1. Converte Map (CSV) -> Objeto de Domínio
                 CatalogItem item = mapToDomain(tenantId, row);
 
+                // 2. Regra de Negócio: Se for INSERT_ONLY, verifica duplicidade de SKU
                 if ("INSERT_ONLY".equalsIgnoreCase(mode)) {
                     if (repository.existsSku(tenantId, item.getSku(), null)) {
-                        errors.add(new RowError(i + 1, row.toString(), List.of("SKU já existe: " + item.getSku())));
-                        continue;
+                        errors.add(new RowError(i + 2, row.toString(), List.of("SKU já existe no sistema: " + item.getSku())));
+                        continue; // Pula para a próxima linha
                     }
                 }
 
+                // 3. Persiste no banco de dados
                 repository.save(item);
                 successCount++;
 
             } catch (Exception e) {
-                errors.add(new RowError(i + 1, row.toString(), List.of("Erro ao processar: " + e.getMessage())));
+                // Captura qualquer erro inesperado (ex: falha de conexão, regra de domínio) e registra
+                log.error("Erro ao processar linha {} do lote para SKU {}", i + 2, row.get("sku"), e);
+                errors.add(new RowError(i + 2, row.toString(), List.of("Erro ao processar: " + e.getMessage())));
             }
         }
 
+        // Retorna o resumo do processamento deste lote
         return new ImportResult(rows.size(), successCount, errors.size(), errors);
     }
 
+    /**
+     * 7. GERAÇÃO DE TEMPLATE
+     * Cria um CSV de exemplo com cabeçalhos e uma linha de dados fictícios para
+     * guiar o usuário no preenchimento correto.
+     */
     @Override
     public List<Map<String, String>> generateTemplate() {
         List<Map<String, String>> template = new ArrayList<>();
 
-        // ★ CORREÇÃO 1: As chaves do cabeçalho DEVEM ser exatamente os nomes
-        // que o parser CSV vai usar para montar o Map (minúsculas, sem espaços).
+        // Linha 1: Cabeçalhos exatos (chaves do Map)
         Map<String, String> header = new LinkedHashMap<>();
-        header.put("sku", "sku");
-        header.put("ean", "ean");
-        header.put("name", "name");
-        header.put("categoryName", "categoryName");
-        header.put("itemType", "itemType");
-        header.put("status", "status");
-        header.put("unitOfMeasure", "unitOfMeasure");
-        header.put("salePrice", "salePrice");
-        header.put("costPrice", "costPrice");
+        for (String h : headers()) {
+            header.put(h, h);
+        }
         template.add(header);
 
-        // Linha 2: Exemplo de dados (aqui sim podemos colocar valores descritivos)
+        // Linha 2: Exemplo prático de preenchimento
         Map<String, String> example = new LinkedHashMap<>();
-        example.put("sku", "PRD-00001");
-        example.put("ean", "7891000100103");
-        example.put("name", "Café Bourbon Especial");
-        example.put("categoryName", "Bebidas");
+        example.put("sku", "PRD-EXEMPLO-001");
+        example.put("name", "Notebook Gamer Exemplo");
+        example.put("description", "Notebook com RTX 4060 e 16GB RAM");
+        example.put("categoryId", "3d134ae0-3998-41b0-8f6e-26e5cf2d264d"); // ⚠️ Substitua por um ID real do seu banco
         example.put("itemType", "PRODUCT");
-        example.put("status", "ACTIVE");
+        example.put("status", "DRAFT");
         example.put("unitOfMeasure", "UN");
-        example.put("salePrice", "89.90");
-        example.put("costPrice", "52.00");
-        template.add(example);
+        example.put("salePrice", "5000,00");
+        example.put("costPrice", "3000,00");
+        example.put("ncm", "8471.30.12");
+        example.put("cest", "");
+        example.put("taxOrigin", "0");
+        example.put("cstIcms", "00");
+        example.put("csosn", "102");
+        example.put("serviceCode", "");
+        example.put("issRate", "");
+        example.put("tracksBatch", "false");
+        example.put("tracksExpiry", "false");
+        example.put("isHazardous", "false");
+        example.put("minStock", "5");
+        example.put("maxStock", "50");
+        example.put("reorderStock", "10");
+        example.put("extraData", "{\"cor\": \"preto\", \"garantia_meses\": 12}");
 
+        template.add(example);
         return template;
     }
 
+    // ========================================================================
+    // MAPEAMENTO DOMÍNIO (A PEÇA-CHAVE DA CORREÇÃO)
+    // ========================================================================
+    /**
+     * Converte uma linha bruta do CSV (Map<String, String>) em um objeto CatalogItem válido.
+     * É aqui que garantimos que todas as regras de integridade do banco e do domínio sejam atendidas.
+     */
     private CatalogItem mapToDomain(UUID tenantId, Map<String, String> row) {
         CatalogItem item = new CatalogItem();
 
-        // ★ CORREÇÃO 2: Se o seu modelo de domínio exige tenantId para RLS, descomente a linha abaixo:
-        // item.setTenantId(tenantId);
+        // ✅ Geração manual do ID (Obrigatório)
+        item.setId(UUID.randomUUID());
 
-        item.setSku(row.get("sku") != null ? row.get("sku").trim() : "");
-        item.setEan(row.get("ean") != null ? row.get("ean").trim() : "");
-        item.setName(row.get("name") != null ? row.get("name").trim() : "");
+        // ✅ Definição do Tenant (Obrigatório para RLS)
+        item.setTenantId(tenantId);
 
-        String typeStr = row.get("itemType");
+        // ✅ Categoria com fallback seguro
+        String categoryIdStr = getSafeString(row, "categoryId");
+        if (!categoryIdStr.isBlank()) {
+            try {
+                item.setCategoryId(UUID.fromString(categoryIdStr));
+            } catch (IllegalArgumentException e) {
+                item.setCategoryId(getDefaultCategoryId());
+            }
+        } else {
+            item.setCategoryId(getDefaultCategoryId());
+        }
+
+        // Identidade Básica
+        item.setSku(getSafeString(row, "sku").trim());
+        item.setName(getSafeString(row, "name").trim());
+
+        // ✅ CORREÇÃO: Todos os campos de texto opcionais devem ser null se vazios
+        item.setDescription(toNullIfBlank(getSafeString(row, "description")));
+        item.setEan(toNullIfBlank(getSafeString(row, "ean")));
+
+        // Enums com tratamento de erro
+        String typeStr = getSafeString(row, "itemType");
         item.setItemType("SERVICE".equalsIgnoreCase(typeStr) ? ItemType.SERVICE : ItemType.PRODUCT);
 
-        String statusStr = row.get("status");
+        String statusStr = getSafeString(row, "status");
         if ("ACTIVE".equalsIgnoreCase(statusStr)) item.setStatus(ItemStatus.ACTIVE);
         else if ("INACTIVE".equalsIgnoreCase(statusStr)) item.setStatus(ItemStatus.INACTIVE);
         else item.setStatus(ItemStatus.DRAFT);
 
-        // ★ CORREÇÃO 3: Proteção contra NullPointerException ou IllegalArgumentException
-        // no Enum.valueOf se o usuário digitar algo errado ou deixar em branco no CSV.
-        String unitStr = row.get("unitOfMeasure");
+        String unitStr = getSafeString(row, "unitOfMeasure");
         try {
-            item.setUnitOfMeasure(UnitOfMeasure.valueOf(
-                    unitStr != null && !unitStr.isBlank() ? unitStr.trim().toUpperCase() : "UN"
-            ));
-        } catch (IllegalArgumentException | NullPointerException e) {
-            item.setUnitOfMeasure(UnitOfMeasure.UN); // Fallback seguro
+            item.setUnitOfMeasure(UnitOfMeasure.valueOf(unitStr.isBlank() ? "UN" : unitStr.trim().toUpperCase()));
+        } catch (IllegalArgumentException e) {
+            item.setUnitOfMeasure(UnitOfMeasure.UN);
         }
 
-        String salePriceStr = row.get("salePrice");
-        if (salePriceStr != null && !salePriceStr.isBlank()) {
-            item.setSalePrice(new BigDecimal(salePriceStr.replace(',', '.')));
-        } else {
-            item.setSalePrice(BigDecimal.ZERO);
+        // Comercial
+        item.setSalePrice(parseDecimal(getSafeString(row, "salePrice"), BigDecimal.ZERO));
+        item.setCostPrice(parseDecimal(getSafeString(row, "costPrice"), BigDecimal.ZERO));
+
+        // ✅ CORREÇÃO: Campos Fiscais Mercadoria (null se vazio)
+        item.setNcm(toNullIfBlank(getSafeString(row, "ncm")));
+        item.setCest(toNullIfBlank(getSafeString(row, "cest")));
+        item.setTaxOrigin(toNullIfBlank(getSafeString(row, "taxOrigin")));
+        item.setCstIcms(toNullIfBlank(getSafeString(row, "cstIcms")));
+        item.setCsosn(toNullIfBlank(getSafeString(row, "csosn")));
+
+        // ✅ CORREÇÃO: Campos Fiscais Serviço (null se vazio)
+        item.setServiceCode(toNullIfBlank(getSafeString(row, "serviceCode")));
+        item.setIssRate(parseDecimal(getSafeString(row, "issRate"), null));
+
+        // Controles Verticais
+        item.setTracksBatch(parseBoolean(getSafeString(row, "tracksBatch")));
+        item.setTracksExpiry(parseBoolean(getSafeString(row, "tracksExpiry")));
+        item.setHazardous(parseBoolean(getSafeString(row, "isHazardous")));
+
+        // Estoque (null se vazio, será limpo automaticamente se for SERVICE)
+        item.setMinStock(parseInteger(getSafeString(row, "minStock")));
+        item.setMaxStock(parseInteger(getSafeString(row, "maxStock")));
+        item.setReorderStock(parseInteger(getSafeString(row, "reorderStock")));
+
+        // Extra Data (JSON) - parse seguro
+        String extraDataStr = getSafeString(row, "extraData");
+        if (!extraDataStr.isBlank()) {
+            try {
+                Map<String, Object> extraData = objectMapper.readValue(extraDataStr, new TypeReference<Map<String, Object>>() {});
+                item.setExtraData(extraData);
+            } catch (Exception e) {
+                log.warn("Falha ao parsear extraData para SKU {}. Usando mapa vazio.", item.getSku());
+                item.setExtraData(new HashMap<>());
+            }
         }
 
-        String costPriceStr = row.get("costPrice");
-        if (costPriceStr != null && !costPriceStr.isBlank()) {
-            item.setCostPrice(new BigDecimal(costPriceStr.replace(',', '.')));
-        } else {
-            item.setCostPrice(BigDecimal.ZERO);
-        }
+        // Aplicar Regras de Negócio do Domínio
+        item.ensureTypeConsistency();
 
         return item;
     }
 
-    private String typeLabel(String type) {
-        return "SERVICE".equals(type) ? "Serviço" : "Produto";
+    /**
+     * ✅ MÉTODO AUXILIAR CRÍTICO:
+     * Converte strings vazias ou em branco para null.
+     * Isso evita que o banco de dados fique cheio de '' (strings vazias)
+     * em vez de NULL (ausência de valor).
+     */
+    private String toNullIfBlank(String value) {
+        return (value == null || value.isBlank()) ? null : value.trim();
     }
 
-    private String statusLabel(String status) {
-        return switch (status) {
-            case "ACTIVE" -> "Ativo";
-            case "INACTIVE" -> "Inativo";
-            default -> "Rascunho";
-        };
+    // ========================================================================
+    // MÉTODOS AUXILIARES DE PARSING SEGURO (Evitam NullPointerException)
+    // ========================================================================
+
+    private String getSafeString(Map<String, String> row, String key) {
+        return row.getOrDefault(key, "").trim();
     }
 
-    private BigDecimal margin(BigDecimal sale, BigDecimal cost) {
-        if (sale == null || sale.signum() <= 0) return BigDecimal.ZERO;
-        BigDecimal c = cost == null ? BigDecimal.ZERO : cost;
-        return sale.subtract(c)
-                .divide(sale, 4, RoundingMode.HALF_UP)
-                .multiply(BigDecimal.valueOf(100))
-                .setScale(2, RoundingMode.HALF_UP);
+    private BigDecimal parseDecimal(String value, BigDecimal defaultValue) {
+        if (value == null || value.isBlank()) return defaultValue;
+        try {
+            // Substitui vírgula por ponto para compatibilidade com BigDecimal
+            return new BigDecimal(value.replace(',', '.').trim());
+        } catch (NumberFormatException e) {
+            return defaultValue;
+        }
+    }
+
+    private Integer parseInteger(String value) {
+        if (value == null || value.isBlank()) return null;
+        try {
+            return Integer.parseInt(value.replace(',', '.').trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private boolean parseBoolean(String value) {
+        return "true".equalsIgnoreCase(value) || "sim".equalsIgnoreCase(value) || "1".equals(value);
+    }
+
+    private void validateDecimal(Map<String, String> row, String key, List<String> errors, String fieldName) {
+        String value = getSafeString(row, key);
+        if (!value.isBlank()) {
+            try {
+                BigDecimal decimal = new BigDecimal(value.replace(',', '.'));
+                if (decimal.compareTo(BigDecimal.ZERO) < 0) {
+                    errors.add("O '" + fieldName + "' não pode ser negativo.");
+                }
+            } catch (NumberFormatException e) {
+                errors.add("O '" + fieldName + "' deve ser um número válido (ex: 100,50 ou 100.50).");
+            }
+        }
+    }
+
+    /**
+     * Retorna um UUID de categoria padrão caso o CSV venha sem essa informação.
+     * ⚠️ IMPORTANTE: Substitua este UUID por um que REALMENTE exista na sua tabela catalog_categories.
+     */
+    private UUID getDefaultCategoryId() {
+        return UUID.fromString("3d134ae0-3998-41b0-8f6e-26e5cf2d264d");
     }
 }

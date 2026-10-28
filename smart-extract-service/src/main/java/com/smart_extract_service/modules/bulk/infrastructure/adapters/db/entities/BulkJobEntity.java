@@ -3,6 +3,8 @@ package com.smart_extract_service.modules.bulk.infrastructure.adapters.db.entiti
 import com.smart_extract_service.modules.bulk.domain.enums.BulkJobStatus;
 import jakarta.persistence.*;
 import lombok.*;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.time.LocalDateTime;
 import java.util.UUID;
@@ -57,6 +59,7 @@ public class BulkJobEntity {
     @Column(name = "payload_type", nullable = false, length = 10)
     private String payloadType;
 
+    @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "payload_json", columnDefinition = "jsonb")
     private String payloadJson;
 
@@ -66,6 +69,7 @@ public class BulkJobEntity {
     @Column(name = "error_file_path")
     private String errorFilePath;
 
+    @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "error_summary", columnDefinition = "jsonb")
     private String errorSummary;
 
