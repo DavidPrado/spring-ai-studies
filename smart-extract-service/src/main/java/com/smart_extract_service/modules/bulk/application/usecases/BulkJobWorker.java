@@ -176,7 +176,14 @@ public class BulkJobWorker {
             if (rowErrors.isEmpty()) {
                 validRows.add(row);
             } else {
-                errors.add(new RowError(i + 1, row.toString(), rowErrors));
+                String rowJson;
+                try {
+                    rowJson = objectMapper.writeValueAsString(row);
+                } catch (Exception e) {
+                    log.warn("Falha ao serializar linha {} como JSON", i + 1);
+                    rowJson = "{}";
+                }
+                errors.add(new RowError(i + 1, rowJson, rowErrors));
             }
         }
 
@@ -186,9 +193,18 @@ public class BulkJobWorker {
                 successCount = result.successRows();
                 errors.addAll(result.errors());
             } catch (Exception e) {
-                log.error("Erro ao processar lote do job {}", job.getId(), e);
+                log.error("❌ Erro ao processar lote do job {}", job.getId(), e);
+
+                String mensagemAmigavel = "Erro ao salvar no banco de dados. Verifique os dados e tente novamente.";
+
                 for (int i = 0; i < validRows.size(); i++) {
-                    errors.add(new RowError(i + 1, validRows.get(i).toString(), List.of("Erro de infraestrutura: " + e.getMessage())));
+                    String rowJson;
+                    try {
+                        rowJson = objectMapper.writeValueAsString(validRows.get(i));
+                    } catch (Exception ex) {
+                        rowJson = "{}";
+                    }
+                    errors.add(new RowError(i + 1, rowJson, List.of(mensagemAmigavel)));
                 }
             }
         }
